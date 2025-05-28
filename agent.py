@@ -115,11 +115,11 @@ async def main():
     for url in image_urls:
         print(f"- {url}")
     
-    # Analyze images using the agent
+    # Analyze images using MediaAnalyzer directly
     print("\n[DEBUG] Analyzing product images...")
     try:
-        result = await Runner.run(agent, input=f"Analyze these images: {', '.join(image_urls)}")
-        image_analysis = result.final_output
+        analyzer = MediaAnalyzer(max_concurrent=5)  # Limit to 5 concurrent operations
+        image_analysis = await analyzer.analyze_media(image_urls=image_urls)
         if "Error" in image_analysis or "No media could be analyzed" in image_analysis:
             raise Exception("Image analysis failed")
         print(image_analysis)
