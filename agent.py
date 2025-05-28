@@ -1,315 +1,222 @@
 import asyncio
-from agents import Agent, Runner, function_tool
-from scraper import get_product_info
-from replicate_api import ReplicateClient
-import os
-import tempfile
-import requests
-from moviepy.editor import ImageClip, concatenate_videoclips, VideoFileClip
-from typing import List, Dict
-import cv2
-import numpy as np
-import base64
-from datetime import datetime
-
-
-@function_tool
-def get_product_info_tool(url: str) -> str:
-    result = get_product_info(url)
-    print("[DEBUG] Product info scraped:")
-    print(result)
-    return result
-
-
-@function_tool
-async def analyze_image_tool(image_urls: List[str], prompt: str = "Describe this product image in detail, focusing on visual elements that would be important for a marketing video. Include details about colors, composition, and any notable features.") -> str:
-    print(f"[DEBUG] Analyzing {len(image_urls)} images with prompt: {prompt}")
-    try:
-        client = ReplicateClient()
-        results = []
-        for url in image_urls:
-            try:
-                result = await client.analyze_image(url, prompt)
-                if result.status == "error":
-                    print(f"[DEBUG] Error analyzing image {url}: {result.error}")
-                    results.append({"url": url, "description": f"Error: {result.error}"})
-                elif not result.output:
-                    print(f"[DEBUG] No output received for image {url}")
-                    results.append({"url": url, "description": "No analysis available"})
-                else:
-                    print(f"[DEBUG] Successfully analyzed image {url}")
-                    results.append({"url": url, "description": result.output})
-            except Exception as e:
-                print(f"[DEBUG] Exception analyzing image {url}: {str(e)}")
-                results.append({"url": url, "description": f"Error: {str(e)}"})
-        
-        # Format results as a structured string
-        formatted_results = "Image Analysis Results:\n"
-        for idx, result in enumerate(results, 1):
-            formatted_results += f"\nImage {idx}:\n"
-            formatted_results += f"URL: {result['url']}\n"
-            formatted_results += f"Description: {result['description']}\n"
-            formatted_results += "-" * 80 + "\n"
-        
-        return formatted_results
-    except Exception as e:
-        error_msg = f"Exception during batch image analysis: {str(e)}"
-        print(f"[DEBUG] {error_msg}")
-        return error_msg
-
-
-@function_tool
-async def merge_images_to_video_tool(image_urls: List[str], durations: List[float] = None) -> dict:
-    print(f"[DEBUG] Merging {len(image_urls)} images into video")
-    try:
-        # Create a temporary directory to store images
-        with tempfile.TemporaryDirectory() as tmpdir:
-            print(f"[DEBUG] Created temporary directory: {tmpdir}")
-            image_paths = []
-            for idx, url in enumerate(image_urls):
-                img_path = os.path.join(tmpdir, f"img_{idx}.jpg")
-                try:
-                    print(f"[DEBUG] Downloading image {idx + 1}/{len(image_urls)} from {url}")
-                    r = requests.get(url, timeout=10)
-                    r.raise_for_status()
-                    with open(img_path, "wb") as f:
-                        f.write(r.content)
-                    print(f"[DEBUG] Saved image to {img_path}")
-                    image_paths.append(img_path)
-                except Exception as e:
-                    print(f"[DEBUG] Failed to download {url}: {e}")
-            
-            if not image_paths:
-                return {"error": "No images could be downloaded."}
-            
-            print(f"[DEBUG] Successfully downloaded {len(image_paths)} images")
-            
-            # Create video clips from images
-            clips = []
-            for idx, path in enumerate(image_paths):
-                duration = durations[idx] if durations and idx < len(durations) else 3.0
-                print(f"[DEBUG] Creating clip {idx + 1}/{len(image_paths)} with duration {duration}s")
-                clip = ImageClip(path).set_duration(duration)
-                clips.append(clip)
-            
-            print("[DEBUG] Concatenating video clips")
-            video = concatenate_videoclips(clips, method="compose")
-            
-            # Generate timestamp for filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = os.path.expanduser(f"~/Desktop/marketing_video_{timestamp}.mp4")
-            print(f"[DEBUG] Will save video to: {output_path}")
-            
-            print("[DEBUG] Writing video file...")
-            video.write_videofile(output_path, fps=24, codec="libx264", audio=False)
-            video.close()
-            print(f"[DEBUG] Video successfully saved to: {output_path}")
-            
-            # Verify the file exists
-            if os.path.exists(output_path):
-                print(f"[DEBUG] Verified file exists at: {output_path}")
-                file_size = os.path.getsize(output_path)
-                print(f"[DEBUG] File size: {file_size} bytes")
-            else:
-                print(f"[DEBUG] WARNING: File not found at: {output_path}")
-            
-            return {"video_path": output_path, "message": f"Video saved to {output_path}"}
-    except Exception as e:
-        error_msg = f"Error creating video: {e}"
-        print(f"[DEBUG] {error_msg}")
-        return {"error": error_msg}
-
-
-@function_tool
-async def analyze_video_tool(video_path: str, num_frames: int = 5) -> str:
-    """
-    Analyze a video by extracting frames and using GPT-4V to describe the storyline.
-    
-    Args:
-        video_path: Path to the video file
-        num_frames: Number of frames to extract for analysis (default: 5)
-    
-    Returns:
-        A description of the video's storyline based on frame analysis
-    """
-    print(f"[DEBUG] Analyzing video: {video_path}")
-    try:
-        if not os.path.exists(video_path):
-            return f"Error: Video file not found at {video_path}"
-            
-        # Create a temporary directory for frames
-        with tempfile.TemporaryDirectory() as tmpdir:
-            try:
-                # Open the video file
-                video = VideoFileClip(video_path)
-                duration = video.duration
-                
-                # Calculate frame timestamps
-                timestamps = np.linspace(0, duration, num_frames)
-                
-                # Extract frames
-                frame_paths = []
-                for idx, timestamp in enumerate(timestamps):
-                    try:
-                        frame = video.get_frame(timestamp)
-                        frame_path = os.path.join(tmpdir, f"frame_{idx}.jpg")
-                        cv2.imwrite(frame_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-                        frame_paths.append(frame_path)
-                    except Exception as e:
-                        print(f"[DEBUG] Error extracting frame at {timestamp}s: {e}")
-                
-                if not frame_paths:
-                    return "Error: Could not extract any frames from the video"
-                
-                # Analyze frames using GPT-4V
-                client = ReplicateClient()
-                prompt = """Analyze these frames from a marketing video and describe:
-1. The overall storyline and progression
-2. Key visual elements and their significance
-3. How the frames work together to tell the product's story
-4. The emotional impact and messaging
-5. Suggestions for improvement (if any)
-
-Focus on how the visual narrative supports the marketing goals."""
-                
-                results = []
-                for idx, frame_path in enumerate(frame_paths):
-                    try:
-                        # Read the frame as base64
-                        with open(frame_path, "rb") as f:
-                            frame_data = f.read()
-                        frame_b64 = base64.b64encode(frame_data).decode()
-                        
-                        # Analyze frame using Replicate API
-                        result = await client.analyze_image(frame_b64, prompt)
-                        if result.status == "success" and result.output:
-                            results.append({
-                                "timestamp": timestamps[idx],
-                                "analysis": result.output
-                            })
-                    except Exception as e:
-                        print(f"[DEBUG] Error analyzing frame {idx}: {e}")
-                
-                # Compile results into a storyline
-                if not results:
-                    return "No frames could be analyzed."
-                
-                storyline = "Video Storyline Analysis:\n\n"
-                for result in results:
-                    storyline += f"At {result['timestamp']:.1f}s:\n"
-                    storyline += f"{result['analysis']}\n"
-                    storyline += "-" * 80 + "\n"
-                
-                return storyline
-                
-            except Exception as e:
-                return f"Error reading video file: {e}"
-            finally:
-                if 'video' in locals():
-                    video.close()
-            
-    except Exception as e:
-        return f"Error analyzing video: {e}"
+from agents.agent import Agent
+from agents.run import Runner
+import re
+from media.models import AnalysisData
+from media.analyzer import MediaAnalyzer
+from media.tools import get_product_info_tool, analyze_media_tool, merge_images_to_video_tool
 
 
 agent = Agent(
     name="Marketing Agent",
-    instructions="""You are a marketing agent specialized in creating high-quality marketing videos. Follow these steps in order:
+    instructions="""You are a marketing agent specialized in creating high-quality marketing videos through an iterative process. The input will include pre-analyzed data in the [ANALYSIS_DATA] section. Use this data for all iterations.
 
-    1. Product Information Gathering:
-       - Use get_product_info_tool to scrape and extract all product details from the URL
-       - Document key features, benefits, and unique selling points
-       - Extract all unique image URLs from the product information
+    Follow these steps in order:
 
-    2. Image Analysis:
-       - Call analyze_image_tool once with ALL unique image URLs
-       - The tool will return structured results with both URLs and descriptions
-       - Document key visual features and potential video scenes based on the analysis
+    1. Use Provided Analysis:
+       - Product information is in analysis_data["product_info"]
+       - Image URLs are in analysis_data["image_urls"]
+       - Image analysis is in analysis_data["image_analysis"]
+       - Use this data for all storyboard iterations
 
-    3. User Intent Analysis:
-       - Analyze the user prompt to understand marketing goals
-       - Extract specific requirements and preferences
-       - Document key marketing objectives
+    2. Storyboard Creation:
+       Create a storyboard in the following format:
+       [STORYBOARD]
+       Scene 1:
+       Media: [image/video URL]
+       Media Description: [detailed description of the visual]
+       Script: [voice over text]
+       Duration: [seconds]
+       ---
+       Scene 2:
+       Media: [image/video URL]
+       Media Description: [detailed description of the visual]
+       Script: [voice over text]
+       Duration: [seconds]
+       ---
+       [END STORYBOARD]
 
-    4. Target Audience Definition:
-       - Based on product features and user intent, define:
-         * Primary and secondary target audiences
-         * Demographics and psychographics
-         * Pain points and desires
-         * Platform preferences
+       Guidelines for storyboard creation:
+       - Each scene should have a clear purpose in the marketing narrative
+       - Media descriptions should be detailed enough for visual understanding
+       - Script should be concise and impactful
+       - Durations should be appropriate for the content (typically 3-5 seconds per scene)
+       - Total video length should be 30-60 seconds
 
-    5. Video Style Selection:
-       Choose one primary style from:
-       - Educational: Focus on product features and benefits
-       - Storytime: Narrative-driven approach
-       - UGC-style: Authentic, user-generated content feel
-       - Aesthetic: Visually focused, lifestyle-oriented
-       - Question-based: Problem-solution format
-       Justify the style choice based on target audience and product type
-
-    6. Storyboard Creation:
-       Create a detailed scene-by-scene storyboard including:
-       - Scene number and duration
-       - Visual elements and transitions
-       - Key messaging points
-       - Music and sound effects
-       - Text overlays or graphics
-       - For each scene, specify:
-         * The exact image URL to use
-         * Why this image was chosen
-         * How it supports the scene's message
-
-    7. Script Development:
-       Write a complete script that includes:
-       - Opening hook
-       - Main content sections
-       - Call to action
-       - Voice-over text
-       - Timing for each section
-
-    8. Video Creation and Iterative Analysis:
-       - Extract the ordered list of image URLs from the storyboard
+    3. Video Generation:
+       - Extract media URLs and durations from the storyboard
        - Call merge_images_to_video_tool with the ordered URLs and durations
        - The tool will return a video_path
-       - Call analyze_video_tool with the video_path
-       - Review the storyline analysis and ensure it aligns with marketing goals
-       - If the analysis suggests improvements (e.g., image order, timing, or selection), update the storyboard/image list and re-run merge_images_to_video_tool and analyze_video_tool as needed until the video meets the marketing objectives
+
+    4. Video Analysis:
+       - Call analyze_media_tool with the video_path
+       - Review the analysis and compare it with the original storyboard
+       - Identify any gaps or areas for improvement
+
+    5. Iterative Improvement:
+       If the user requests changes:
+       - Parse the user's feedback
+       - Update the storyboard accordingly
+       - Regenerate the video
+       - Re-analyze the new version
+       - Continue until the user is satisfied
 
     Output Format:
-    Present the complete marketing video plan in a structured format with clear sections for each step.
-    Include both the image URLs and their descriptions in the storyboard section.
-    End with the video analysis results and any suggested improvements or iterations made.
+    For each iteration, present:
+    1. The current storyboard
+    2. The video generation results
+    3. The video analysis
+    4. A prompt for user feedback
+
+    The user can then provide feedback in the format:
+    [FEEDBACK]
+    Scene X: [specific changes requested]
+    [END FEEDBACK]
+
+    Continue this process until the user indicates satisfaction with the final video.
     """,
-    tools=[get_product_info_tool, analyze_image_tool, merge_images_to_video_tool, analyze_video_tool],
+    tools=[get_product_info_tool, analyze_media_tool, merge_images_to_video_tool],
 )
 
 
 async def main():
+    """Main function to run the marketing video creation process"""
     url = "https://www.uncomfy.store/products/preorder-strawberry-maxine-heatable-plush"
     user_prompt = "Create a marketing video that highlights the comfort and warmth features of this plush toy"
     
-    # Format the input as a string with both URL and prompt
-    input_text = f"URL: {url}\nPrompt: {user_prompt}"
-    result = await Runner.run(agent, input=input_text)
-    print(result.final_output)
+    # Initial analysis phase
+    print("\n=== Initial Analysis Phase ===")
+    
+    # Get product info using the agent
+    result = await Runner.run(agent, input=f"Get product information from {url}")
+    product_info = result.final_output
+    print("\n[DEBUG] Product info scraped:")
+    print(product_info)
+    
+    # Extract image URLs from product info
+    image_urls = []
+    lines = product_info.split('\n')
+    for line in lines:
+        if 'http' in line:
+            url_match = re.search(r'https?://[^\s<>"]+?(?:\.jpg|\.jpeg|\.png|\.gif)(?:\?[^\s<>"]*)?', line)
+            if url_match:
+                url = url_match.group(0)
+                if url not in image_urls:
+                    image_urls.append(url)
+    
+    if not image_urls:
+        print("\n[ERROR] No image URLs found in product info. Using fallback URLs...")
+        image_urls = [
+            "https://www.uncomfy.store/cdn/shop/files/IMG_8222.jpg?v=1744352119&width=1445",
+            "https://www.uncomfy.store/cdn/shop/files/IMG_82232.jpg?v=1744352078&width=1946"
+        ]
+    
+    print(f"\n[DEBUG] Found {len(image_urls)} image URLs:")
+    for url in image_urls:
+        print(f"- {url}")
+    
+    # Analyze images using the agent
+    print("\n[DEBUG] Analyzing product images...")
+    try:
+        result = await Runner.run(agent, input=f"Analyze these images: {', '.join(image_urls)}")
+        image_analysis = result.final_output
+        if "Error" in image_analysis or "No media could be analyzed" in image_analysis:
+            raise Exception("Image analysis failed")
+        print(image_analysis)
+    except Exception as e:
+        print(f"\n[ERROR] Image analysis failed: {str(e)}")
+        print("Continuing with default analysis...")
+        image_analysis = "Default analysis: Product images show a plush toy with warm, comforting features."
+    
+    # Store analysis results
+    analysis_data = AnalysisData(
+        product_info=product_info,
+        image_urls=image_urls,
+        image_analysis=image_analysis
+    )
+    
+    # Format initial input
+    input_text = f"""URL: {url}
+Prompt: {user_prompt}
 
+[ANALYSIS_DATA]
+{analysis_data.__dict__}
+[END_ANALYSIS_DATA]
+"""
+    
+    # Storyboard iteration phase
+    while True:
+        try:
+            result = await Runner.run(agent, input=input_text)
+            
+            # Extract storyboard
+            storyboard = ""
+            if "[STORYBOARD]" in result.final_output:
+                start_idx = result.final_output.find("[STORYBOARD]")
+                end_idx = result.final_output.find("[END STORYBOARD]")
+                if end_idx == -1:
+                    end_idx = result.final_output.find("---", start_idx)
+                storyboard = result.final_output[start_idx:end_idx + len("[END STORYBOARD]")]
+            
+            if not storyboard:
+                print("\n[ERROR] No storyboard found in the result. Retrying...")
+                continue
+            
+            print("\n=== Proposed Storyboard ===")
+            print(storyboard)
+            
+            # Get storyboard approval
+            print("\nDo you approve this storyboard? (yes/no)")
+            approval = input().strip().lower()
+            
+            if approval != 'yes':
+                print("\nPlease provide feedback on the storyboard:")
+                print("[FEEDBACK]")
+                print("Scene X: [your changes]")
+                print("[END FEEDBACK]")
+                feedback = input("\nYour feedback: ").strip()
+                input_text = f"""Previous Result: {result.final_output}
 
-async def test_scraping_and_image_analytics():
-    print("\n=== Testing Product Info Tool ===")
-    url = "https://www.uncomfy.store/products/preorder-strawberry-maxine-heatable-plush"
-    from scraper import get_product_info
-    result = get_product_info(url)
-    print(f"Product Info Result: {result}")
+[ANALYSIS_DATA]
+{analysis_data.__dict__}
+[END_ANALYSIS_DATA]
 
-    print("\n=== Testing Image Analysis Tool ===")
-    image_urls = [
-        "https://www.uncomfy.store/cdn/shop/files/IMG_8222.jpg?v=1744352119&width=1445",
-        "https://www.uncomfy.store/cdn/shop/files/IMG_82232.jpg?v=1744352078&width=1946"
-    ]
-    prompt = "Describe this image in detail."
-    client = ReplicateClient()
-    analysis_result = await analyze_image_tool(image_urls, prompt)
-    print(analysis_result)
+User Feedback: {feedback}"""
+                continue
+            
+            # Generate video
+            print("\n=== Generating Video ===")
+            video_result = await Runner.run(agent, input=input_text)
+            print("\n=== Video Generation Results ===")
+            print(video_result.final_output)
+            
+            # Show final storyboard
+            print("\n=== Final Storyboard ===")
+            print(storyboard)
+            
+            # Get final feedback
+            print("\n=== Provide Feedback ===")
+            print("Enter your feedback in the format:")
+            print("[FEEDBACK]")
+            print("Scene X: [your changes]")
+            print("[END FEEDBACK]")
+            print("Or type 'done' to finish")
+            
+            feedback = input("\nYour feedback: ").strip()
+            if feedback.lower() == 'done':
+                break
+                
+            input_text = f"""Previous Result: {video_result.final_output}
+
+[ANALYSIS_DATA]
+{analysis_data.__dict__}
+[END_ANALYSIS_DATA]
+
+User Feedback: {feedback}"""
+        except Exception as e:
+            print(f"\n[ERROR] An error occurred: {str(e)}")
+            print("Retrying with the same input...")
+            continue
 
 
 if __name__ == "__main__":
