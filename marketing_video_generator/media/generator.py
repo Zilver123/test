@@ -10,7 +10,6 @@ import json
 import asyncio
 from fastapi import WebSocket
 
-
 class VideoGenerator:
     """Handles video generation from images"""
     
@@ -19,14 +18,14 @@ class VideoGenerator:
         self.target_height = 1920  # TikTok vertical format height
         self.websocket = websocket
 
-    async def _send_update(self, message: str):
+    async def _send_update(self, message: str, message_type: str = "update"):
         """Send update to UI if websocket is available"""
         if self.websocket:
             try:
-                await self.websocket.send_text(json.dumps({
-                    "type": "update",
+                await self.websocket.send_json({
+                    "type": message_type,
                     "message": message
-                }))
+                })
             except Exception as e:
                 print(f"[DEBUG] Failed to send websocket update: {e}")
 
@@ -52,10 +51,7 @@ class VideoGenerator:
                 # Send the video path to UI immediately
                 web_path = f"/videos/{Path(output_path).name}"
                 print(f"[DEBUG] Sending video ready message with path: {web_path}")
-                await self._send_update(json.dumps({
-                    "type": "video_ready",
-                    "video_path": web_path
-                }))
+                await self._send_update(web_path, "video_ready")
                 
                 return {"video_path": output_path, 
                        "message": f"Video saved to {output_path}"}

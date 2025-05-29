@@ -9,6 +9,7 @@ from typing import List, Dict
 from datetime import datetime
 from pathlib import Path
 from moviepy.editor import ImageClip, concatenate_videoclips
+import json
 
 
 agent = Agent(
@@ -61,7 +62,7 @@ agent = Agent(
 )
 
 
-async def main(url: str = None, user_prompt: str = None):
+async def main(url: str = None, user_prompt: str = None, websocket = None):
     """Main function to run the marketing video creation process"""
     if url is None:
         url = "https://www.uncomfy.store/products/preorder-strawberry-maxine-heatable-plush"
@@ -101,51 +102,56 @@ async def main(url: str = None, user_prompt: str = None):
     
     # Analyze images using MediaAnalyzer directly
     print("\n[DEBUG] Analyzing product images...")
-    try:
-        analyzer = MediaAnalyzer(max_concurrent=5)  # Limit to 5 concurrent operations
-        image_analysis = await analyzer.analyze_media(image_urls=image_urls)
-        if "Error" in image_analysis or "No media could be analyzed" in image_analysis:
-            raise Exception("Image analysis failed")
-        print(image_analysis)
-    except Exception as e:
-        print(f"\n[ERROR] Image analysis failed: {str(e)}")
-        print("Continuing with default analysis...")
-        image_analysis = "Default analysis: Product images show a plush toy with warm, comforting features."
+    analyzer = MediaAnalyzer()
+    image_analysis = await analyzer.analyze_media(image_urls=image_urls)
+    print("\n[DEBUG] Image analysis complete:")
+    print(image_analysis)
     
-    # Store analysis results
-    analysis_data = AnalysisData(
-        product_info=product_info,
-        image_urls=image_urls,
-        image_analysis=image_analysis
+    # Create analysis data
+    analysis_data = {
+        "product_info": product_info,
+        "image_urls": image_urls,
+        "image_analysis": image_analysis
+    }
+    
+    # Generate video using the agent with analysis data
+    print("\n=== Video Generation Phase ===")
+    result = await Runner.run(
+        agent,
+        input=f"""Create a marketing video based on this analysis data:
+        [ANALYSIS_DATA]
+        {json.dumps(analysis_data, indent=2)}
+        [/ANALYSIS_DATA]
+        
+        User Prompt: {user_prompt}
+        """
     )
     
-    # Format initial input
-    input_text = f"""URL: {url}
-Prompt: {user_prompt}
-
-[ANALYSIS_DATA]
-{analysis_data.__dict__}
-[END_ANALYSIS_DATA]
-"""
+    # Extract video path from the result
+    video_path = None
+    if isinstance(result.final_output, dict):
+        video_path = result.final_output.get("video_path")
+    else:
+        # Try to find video path in the text output
+        video_match = re.search(r'Video Path: `(.*?)`', result.final_output)
+        if video_match:
+            video_path = video_match.group(1)
     
-    # Get initial storyboard
-    result = await Runner.run(agent, input=input_text)
+    # Create video using the video generator
+    if video_path is None:
+        print("\n[DEBUG] No video path found in agent output, generating video directly...")
+        generator = VideoGenerator(websocket)
+        durations = [3.0] * len(image_urls)  # Default 3 seconds per image
+        result = await generator.create_video(image_urls, durations)
+        video_path = result.get("video_path")
     
-    # Extract storyboard
-    storyboard = ""
-    if "[STORYBOARD]" in result.final_output:
-        start_idx = result.final_output.find("[STORYBOARD]")
-        end_idx = result.final_output.find("[END STORYBOARD]")
-        if end_idx == -1:
-            end_idx = result.final_output.find("---", start_idx)
-        storyboard = result.final_output[start_idx:end_idx + len("[END STORYBOARD]")]
-    
-    # Return the analysis data and storyboard
+    # Return the complete analysis data
     return {
         "product_info": product_info,
         "image_urls": image_urls,
         "image_analysis": image_analysis,
-        "storyboard": storyboard
+        "storyboard": result.final_output if isinstance(result.final_output, str) else "",
+        "video_path": video_path
     }
 
 
