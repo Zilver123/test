@@ -5,6 +5,10 @@ import re
 from media.models import AnalysisData
 from media.analyzer import MediaAnalyzer
 from media.tools import get_product_info_tool, analyze_media_tool, merge_images_to_video_tool
+from typing import List, Dict
+from datetime import datetime
+from pathlib import Path
+from moviepy.editor import ImageClip, concatenate_videoclips
 
 
 agent = Agent(
@@ -48,41 +52,21 @@ agent = Agent(
        - Call merge_images_to_video_tool with the ordered URLs and durations
        - The tool will return a video_path
 
-    4. Video Analysis:
-       - Call analyze_media_tool with the video_path
-       - Review the analysis and compare it with the original storyboard
-       - Identify any gaps or areas for improvement
-
-    5. Iterative Improvement:
-       If the user requests changes:
-       - Parse the user's feedback
-       - Update the storyboard accordingly
-       - Regenerate the video
-       - Re-analyze the new version
-       - Continue until the user is satisfied
-
     Output Format:
     For each iteration, present:
     1. The current storyboard
     2. The video generation results
-    3. The video analysis
-    4. A prompt for user feedback
-
-    The user can then provide feedback in the format:
-    [FEEDBACK]
-    Scene X: [specific changes requested]
-    [END FEEDBACK]
-
-    Continue this process until the user indicates satisfaction with the final video.
     """,
     tools=[get_product_info_tool, analyze_media_tool, merge_images_to_video_tool],
 )
 
 
-async def main():
+async def main(url: str = None, user_prompt: str = None):
     """Main function to run the marketing video creation process"""
-    url = "https://www.uncomfy.store/products/preorder-strawberry-maxine-heatable-plush"
-    user_prompt = "Create a marketing video that highlights the comfort and warmth features of this plush toy"
+    if url is None:
+        url = "https://www.uncomfy.store/products/preorder-strawberry-maxine-heatable-plush"
+    if user_prompt is None:
+        user_prompt = "Create a marketing video that highlights the comfort and warmth features of this plush toy"
     
     # Initial analysis phase
     print("\n=== Initial Analysis Phase ===")
@@ -144,79 +128,99 @@ Prompt: {user_prompt}
 [END_ANALYSIS_DATA]
 """
     
-    # Storyboard iteration phase
-    while True:
-        try:
-            result = await Runner.run(agent, input=input_text)
-            
-            # Extract storyboard
-            storyboard = ""
-            if "[STORYBOARD]" in result.final_output:
-                start_idx = result.final_output.find("[STORYBOARD]")
-                end_idx = result.final_output.find("[END STORYBOARD]")
-                if end_idx == -1:
-                    end_idx = result.final_output.find("---", start_idx)
-                storyboard = result.final_output[start_idx:end_idx + len("[END STORYBOARD]")]
-            
-            if not storyboard:
-                print("\n[ERROR] No storyboard found in the result. Retrying...")
-                continue
-            
-            print("\n=== Proposed Storyboard ===")
-            print(storyboard)
-            
-            # Get storyboard approval
-            print("\nDo you approve this storyboard? (yes/no)")
-            approval = input().strip().lower()
-            
-            if approval != 'yes':
-                print("\nPlease provide feedback on the storyboard:")
-                print("[FEEDBACK]")
-                print("Scene X: [your changes]")
-                print("[END FEEDBACK]")
-                feedback = input("\nYour feedback: ").strip()
-                input_text = f"""Previous Result: {result.final_output}
+    # Get initial storyboard
+    result = await Runner.run(agent, input=input_text)
+    
+    # Extract storyboard
+    storyboard = ""
+    if "[STORYBOARD]" in result.final_output:
+        start_idx = result.final_output.find("[STORYBOARD]")
+        end_idx = result.final_output.find("[END STORYBOARD]")
+        if end_idx == -1:
+            end_idx = result.final_output.find("---", start_idx)
+        storyboard = result.final_output[start_idx:end_idx + len("[END STORYBOARD]")]
+    
+    # Return the analysis data and storyboard
+    return {
+        "product_info": product_info,
+        "image_urls": image_urls,
+        "image_analysis": image_analysis,
+        "storyboard": storyboard
+    }
 
-[ANALYSIS_DATA]
-{analysis_data.__dict__}
-[END_ANALYSIS_DATA]
 
-User Feedback: {feedback}"""
-                continue
-            
-            # Generate video
-            print("\n=== Generating Video ===")
-            video_result = await Runner.run(agent, input=input_text)
-            print("\n=== Video Generation Results ===")
-            print(video_result.final_output)
-            
-            # Show final storyboard
-            print("\n=== Final Storyboard ===")
-            print(storyboard)
-            
-            # Get final feedback
-            print("\n=== Provide Feedback ===")
-            print("Enter your feedback in the format:")
-            print("[FEEDBACK]")
-            print("Scene X: [your changes]")
-            print("[END FEEDBACK]")
-            print("Or type 'done' to finish")
-            
-            feedback = input("\nYour feedback: ").strip()
-            if feedback.lower() == 'done':
-                break
-                
-            input_text = f"""Previous Result: {video_result.final_output}
+async def generate_video(self, image_urls: List[str], durations: List[float]) -> Dict[str, str]:
+    """Generate a video from a list of image URLs and durations."""
+    try:
+        await manager.broadcast("Starting video generation process...")
+        
+        # Validate inputs
+        if not image_urls or not durations:
+            raise ValueError("Image URLs and durations must not be empty")
+        if len(image_urls) != len(durations):
+            raise ValueError("Number of image URLs must match number of durations")
+        
+        await manager.broadcast(f"Processing {len(image_urls)} scenes...")
+        
+        # Create video clips
+        clips = []
+        for i, (url, duration) in enumerate(zip(image_urls, durations)):
+            await manager.broadcast(f"Processing scene {i + 1}/{len(image_urls)}...")
+            try:
+                clip = await self._create_clip(url, duration)
+                clips.append(clip)
+                await manager.broadcast(f"Scene {i + 1} processed successfully")
+            except Exception as e:
+                await manager.broadcast(f"Error processing scene {i + 1}: {str(e)}")
+                raise
+        
+        await manager.broadcast("All scenes processed. Merging into final video...")
+        
+        # Generate the final video
+        output_path = await self._generate_video(clips)
+        await manager.broadcast("Video generation complete!")
+        
+        return {
+            "video_path": output_path,
+            "message": "Video generated successfully"
+        }
+    except Exception as e:
+        error_msg = f"Error in video generation: {str(e)}"
+        await manager.broadcast(f"Error: {error_msg}")
+        raise Exception(error_msg)
 
-[ANALYSIS_DATA]
-{analysis_data.__dict__}
-[END_ANALYSIS_DATA]
-
-User Feedback: {feedback}"""
-        except Exception as e:
-            print(f"\n[ERROR] An error occurred: {str(e)}")
-            print("Retrying with the same input...")
-            continue
+async def _generate_video(self, clips: List[ImageClip]) -> str:
+    """Generate the final video from clips."""
+    try:
+        await manager.broadcast("Starting final video compilation...")
+        
+        # Create output directory if it doesn't exist
+        output_dir = Path("output")
+        output_dir.mkdir(exist_ok=True)
+        
+        # Generate unique filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = str(output_dir / f"marketing_video_{timestamp}.mp4")
+        
+        await manager.broadcast("Rendering video...")
+        
+        # Merge clips into final video
+        final_clip = concatenate_videoclips(clips)
+        final_clip.write_videofile(
+            output_path,
+            fps=24,
+            codec='libx264',
+            audio_codec='aac',
+            temp_audiofile='temp-audio.m4a',
+            remove_temp=True
+        )
+        
+        await manager.broadcast("Video rendering complete!")
+        return output_path
+    except Exception as e:
+        error_msg = f"Error in video compilation: {str(e)}"
+        await manager.broadcast(f"Error: {error_msg}")
+        raise Exception(error_msg)
 
 
 if __name__ == "__main__":
