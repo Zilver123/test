@@ -7,8 +7,17 @@ from .tools.scrape_url import scrape_url
 from .tools.analyze_media import analyze_media
 from .tools.generate_storyboard import generate_storyboard
 from .tools.render_video import render_video
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For dev, allow all. For prod, restrict this.
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
