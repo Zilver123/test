@@ -23,37 +23,75 @@ def scrape_url(url: str) -> Dict:
         desc_div = soup.find('div', {'class': 'product__description'})
         if desc_div:
             desc = desc_div.get_text(strip=True)
-    # Images: collect all <img> tags, check src, data-src, srcset
-    images = set()
-    for img in soup.find_all('img'):
-        # src
-        src = img.get('src')
-        if src:
-            if src.startswith('//'):
-                src = 'https:' + src
-            elif src.startswith('/'):
-                src = 'https://www.uncomfy.store' + src
-            images.add(src)
-        # data-src
-        data_src = img.get('data-src')
-        if data_src:
-            if data_src.startswith('//'):
-                data_src = 'https:' + data_src
-            elif data_src.startswith('/'):
-                data_src = 'https://www.uncomfy.store' + data_src
-            images.add(data_src)
-        # srcset (take the first URL)
-        srcset = img.get('srcset')
-        if srcset:
-            first_url = srcset.split(',')[0].strip().split(' ')[0]
-            if first_url.startswith('//'):
-                first_url = 'https:' + first_url
-            elif first_url.startswith('/'):
-                first_url = 'https://www.uncomfy.store' + first_url
-            images.add(first_url)
-    images = list(images)
-    return {
+    # Try to find product gallery images first
+    gallery_imgs = []
+    # Look for common product gallery containers
+    for gallery_class in ["product__media", "product-gallery", "product__media-list", "product__media-wrapper"]:
+        gallery = soup.find_all(class_=gallery_class)
+        for g in gallery:
+            for img in g.find_all("img"):
+                src = img.get("src")
+                if src:
+                    if src.startswith('//'):
+                        src = 'https:' + src
+                    elif src.startswith('/'):
+                        src = 'https://www.uncomfy.store' + src
+                    gallery_imgs.append(src)
+                data_src = img.get("data-src")
+                if data_src:
+                    if data_src.startswith('//'):
+                        data_src = 'https:' + data_src
+                    elif data_src.startswith('/'):
+                        data_src = 'https://www.uncomfy.store' + data_src
+                    gallery_imgs.append(data_src)
+                srcset = img.get("srcset")
+                if srcset:
+                    first_url = srcset.split(',')[0].strip().split(' ')[0]
+                    if first_url.startswith('//'):
+                        first_url = 'https:' + first_url
+                    elif first_url.startswith('/'):
+                        first_url = 'https://www.uncomfy.store' + first_url
+                    gallery_imgs.append(first_url)
+    # Remove duplicates
+    gallery_imgs = list(dict.fromkeys(gallery_imgs))
+    # If not enough, supplement with all <img> tags
+    all_imgs = set(gallery_imgs)
+    if len(gallery_imgs) < 10:
+        for img in soup.find_all('img'):
+            src = img.get('src')
+            if src:
+                if src.startswith('//'):
+                    src = 'https:' + src
+                elif src.startswith('/'):
+                    src = 'https://www.uncomfy.store' + src
+                all_imgs.add(src)
+            data_src = img.get('data-src')
+            if data_src:
+                if data_src.startswith('//'):
+                    data_src = 'https:' + data_src
+                elif data_src.startswith('/'):
+                    data_src = 'https://www.uncomfy.store' + data_src
+                all_imgs.add(data_src)
+            srcset = img.get('srcset')
+            if srcset:
+                first_url = srcset.split(',')[0].strip().split(' ')[0]
+                if first_url.startswith('//'):
+                    first_url = 'https:' + first_url
+                elif first_url.startswith('/'):
+                    first_url = 'https://www.uncomfy.store' + first_url
+                all_imgs.add(first_url)
+        all_imgs = list(all_imgs)
+    else:
+        all_imgs = gallery_imgs
+    # Filtering
+    def is_relevant(img_url):
+        skip_keywords = ["icon", "logo", "thumb", "sprite", "favicon", "banner", "arrow", "cart", "star"]
+        return not any(kw in img_url.lower() for kw in skip_keywords)
+    filtered_images = [img for img in all_imgs if is_relevant(img)]
+    filtered_images = filtered_images[:10]
+    result = {
         'title': title,
         'description': desc,
-        'images': images,
-    } 
+        'images': filtered_images,
+    }
+    return result 
