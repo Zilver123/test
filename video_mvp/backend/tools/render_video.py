@@ -6,6 +6,7 @@ import json
 from PIL import Image
 import cv2
 import numpy as np
+import subprocess
 
 # Placeholder for agent tool registration
 def function_tool(func):
@@ -70,6 +71,22 @@ def render_video(storyboard: str, media_files: List[str], output_path: str) -> s
             current_frame += 1
         out.release()
         print(f"[render_video] Video written to {output_path}")
+
+        # --- Post-process: re-encode to H.264 for browser compatibility ---
+        h264_path = output_path.replace('.mp4', '_h264.mp4')
+        ffmpeg_cmd = [
+            'ffmpeg', '-y', '-i', output_path,
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+            h264_path
+        ]
+        try:
+            print(f"[render_video] Running ffmpeg: {' '.join(ffmpeg_cmd)}")
+            subprocess.run(ffmpeg_cmd, check=True)
+            # Replace original with h264 version
+            os.replace(h264_path, output_path)
+            print(f"[render_video] Re-encoded video to H.264 at {output_path}")
+        except Exception as e:
+            print(f"[render_video] ffmpeg re-encode failed: {e}")
         return output_path
     except Exception as e:
         print(f"[render_video] Exception: {e}")
