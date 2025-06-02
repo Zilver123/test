@@ -184,4 +184,31 @@ def scrape_url(url: str) -> dict:
 
 ---
 
+## Agent/Tool Best Practices & Handoff Requirements
+
+1. **Observability:**
+   - All tools and agents must log their inputs, outputs, and errors for every invocation. This is required for debugging, agent handoff, and robust automation.
+
+2. **Testing:**
+   - Every tool and the full pipeline must have real-data, multi-stage, end-to-end tests. Tests must print all stage inputs/outputs and validate against the PRD.
+
+3. **Documentation & Handoff:**
+   - After any major change, update the relevant `.md` files (handbooks, changelogs, docs) with new learnings, pitfalls, or changes to agent/tool logic.
+
+4. **API Contract Enforcement:**
+   - All API endpoints and tool outputs must strictly follow the documented schema. If a contract changes, update all dependent code, docs, and tests.
+
+5. **Agent SDK Compliance:**
+   - All agent and tool code must follow the [Agents SDK documentation](agents.mdc) for registration, invocation, and modularity. Use `@function_tool` decorators and explicit tool schemas.
+
+6. **UI/Frontend Robustness:**
+   - All UI changes (especially for Flutter web) must be tested for widget tree errors and documented in the handbook if any pitfalls are found.
+
+7. **Versioning and Changelog:**
+   - When making breaking changes to tools, agents, or APIs, increment the version and document the change in `CHANGELOG_AGENT_NOTES.md`.
+
+---
+
+**Always consult `CURSOR_RULES.md` for the latest project rules and agent/developer expectations.**
+
 *Would you like this PRD exported as a PDF or shared as a collaboration doc?*
